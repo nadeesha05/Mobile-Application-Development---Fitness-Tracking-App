@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import { LocationCoordinate } from '../types/tracking';
+import { isValidCoordinate } from '../utils/geo';
 
 export interface LocationPermissionResult {
   granted: boolean;
@@ -13,9 +14,23 @@ export interface LocationServiceOptions {
   distanceInterval?: number;
 }
 
+export class LocationServiceError extends Error {
+  code: 'PERMISSION_DENIED' | 'SERVICES_DISABLED' | 'GPS_UNAVAILABLE' | 'INVALID_COORDINATE' | 'UNKNOWN';
+
+  constructor(
+    message: string,
+    code: 'PERMISSION_DENIED' | 'SERVICES_DISABLED' | 'GPS_UNAVAILABLE' | 'INVALID_COORDINATE' | 'UNKNOWN'
+  ) {
+    super(message);
+    this.name = 'LocationServiceError';
+    this.code = code;
+  }
+}
+
 class LocationService {
   private subscription: Location.LocationSubscription | null = null;
   private isWatching: boolean = false;
+  private isStarting: boolean = false;
 
   /**
    * Check if foreground location permission is currently granted
@@ -29,7 +44,7 @@ class LocationService {
         canAskAgain: response.canAskAgain,
       };
     } catch (error) {
-      console.warn('Error checking location permission:', error);
+      console.warn('[LocationService] Error checking location permission:', error);
       return {
         granted: false,
         status: Location.PermissionStatus.UNDETERMINED,
@@ -50,7 +65,7 @@ class LocationService {
         canAskAgain: response.canAskAgain,
       };
     } catch (error) {
-      console.error('Error requesting location permission:', error);
+      console.error('[LocationService] Error requesting location permission:', error);
       return {
         granted: false,
         status: Location.PermissionStatus.DENIED,
@@ -66,21 +81,22 @@ class LocationService {
     try {
       return await Location.hasServicesEnabledAsync();
     } catch (error) {
-      console.warn('Error checking if location services are enabled:', error);
+      console.warn('[LocationService] Error checking if location services are enabled:', error);
       return false;
     }
   }
 
   /**
-   * Fetch current GPS position once
+   * Fetch current GPS position once with validation
    */
   async getCurrentLocation(
     accuracy: Location.Accuracy = Location.Accuracy.High
   ): Promise<LocationCoordinate> {
     const isServiceOn = await this.isLocationServicesEnabled();
     if (!isServiceOn) {
-      throw new Error(
-        'GPS / Location service is turned off on your device. Please enable GPS in device settings.'
+      throw new LocationServiceError(
+        'Location services are disabled on your device. Please turn on GPS in device settings.',
+        'SERVICES_DISABLED'
       );
     }
 
@@ -88,44 +104,73 @@ class LocationService {
     if (!perm.granted) {
       const requested = await this.requestPermission();
       if (!requested.granted) {
-        throw new Error('Location permission was denied.');
+        throw new LocationServiceError(
+          'Location permission was denied. Please grant location access in app settings.',
+          'PERMISSION_DENIED'
+        );
       }
     }
 
-    const location = await Location.getCurrentPositionAsync({ accuracy });
-    return this.mapExpoLocation(location);
-  }
-
-  /**
-   * Start listening to continuous GPS position updates
-   */
-  async startLocationUpdates(
-    onLocation: (coordinate: LocationCoordinate) => void,
-    onError?: (error: Error) => void,
-    options?: LocationServiceOptions
-  ): Promise<void> {
     try {
-      // 1. Check device location hardware toggle
-      const serviceEnabled = await this.isLocationServicesEnabled();
-      if (!serviceEnabled) {
-        throw new Error(
-          'Location services are disabled on your device. Please turn on GPS.'
+      const location = await Location.getCurrentPositionAsync({ accuracy });
+      const coord = this.mapExpoLocation(location);
+
+      if (!isValidCoordinate(coord)) {
+        throw new LocationServiceError(
+          'Received invalid GPS coordinates from device sensor.',
+          'INVALID_COORDINATE'
         );
       }
 
-      // 2. Ensure permission
+      return coord;
+    } catch (err: any) {
+      if (err instanceof LocationServiceError) throw err;
+      throw new LocationServiceError(
+        err?.message || 'GPS location currently unavailable. Please check your signal.',
+        'GPS_UNAVAILABLE'
+      );
+    }
+  }
+
+  /**
+   * Start listening to continuous GPS position updates.
+   * Guarded against concurrent duplicate calls to prevent duplicate watchers.
+   */
+  async startLocationUpdates(
+    onLocation: (coordinate: LocationCoordinate) => void,
+    onError?: (error: LocationServiceError) => void,
+    options?: LocationServiceOptions
+  ): Promise<void> {
+    // Prevent simultaneous start calls / race conditions
+    if (this.isStarting) {
+      return;
+    }
+    this.isStarting = true;
+
+    try {
+      // 1. Clean up any existing active subscription first to avoid duplicate callbacks
+      await this.stopLocationUpdates();
+
+      // 2. Check device location hardware toggle
+      const serviceEnabled = await this.isLocationServicesEnabled();
+      if (!serviceEnabled) {
+        throw new LocationServiceError(
+          'Location services are turned off on your device. Please turn on GPS.',
+          'SERVICES_DISABLED'
+        );
+      }
+
+      // 3. Ensure permission is granted
       let perm = await this.checkPermission();
       if (!perm.granted) {
         perm = await this.requestPermission();
         if (!perm.granted) {
-          throw new Error(
-            'Location permission is required to track your GPS route.'
+          throw new LocationServiceError(
+            'Location permission is required to track your GPS route.',
+            'PERMISSION_DENIED'
           );
         }
       }
-
-      // 3. Stop any existing watcher before starting a new one
-      await this.stopLocationUpdates();
 
       const accuracy = options?.accuracy ?? Location.Accuracy.BestForNavigation;
       const timeInterval = options?.timeInterval ?? 1000; // 1 second
@@ -138,32 +183,55 @@ class LocationService {
           distanceInterval,
         },
         (location) => {
-          const coord = this.mapExpoLocation(location);
-          onLocation(coord);
+          try {
+            const coord = this.mapExpoLocation(location);
+            if (isValidCoordinate(coord)) {
+              onLocation(coord);
+            } else {
+              console.warn('[LocationService] Filtered out invalid coordinate:', coord);
+            }
+          } catch (callbackErr) {
+            console.error('[LocationService] Error processing location update:', callbackErr);
+          }
         }
       );
 
       this.isWatching = true;
     } catch (err: any) {
       this.isWatching = false;
-      const error = err instanceof Error ? err : new Error(String(err));
+      const locError =
+        err instanceof LocationServiceError
+          ? err
+          : new LocationServiceError(
+              err?.message || 'Failed to start GPS tracking.',
+              'UNKNOWN'
+            );
+
       if (onError) {
-        onError(error);
+        onError(locError);
       } else {
-        throw error;
+        throw locError;
       }
+    } finally {
+      this.isStarting = false;
     }
   }
 
   /**
-   * Stop watching GPS position updates
+   * Stop watching GPS position updates safely and cleanly.
    */
   async stopLocationUpdates(): Promise<void> {
-    if (this.subscription) {
-      this.subscription.remove();
+    try {
+      if (this.subscription) {
+        this.subscription.remove();
+        this.subscription = null;
+      }
+    } catch (removeErr) {
+      console.warn('[LocationService] Warning during subscription removal:', removeErr);
+    } finally {
       this.subscription = null;
+      this.isWatching = false;
     }
-    this.isWatching = false;
   }
 
   /**

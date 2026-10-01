@@ -19,6 +19,9 @@ export const TrackingScreen: React.FC = () => {
   const {
     activityType,
     status,
+    statusMessage,
+    gpsSignalQuality,
+    accuracyWarning,
     coordinates,
     currentLocation,
     distance,
@@ -27,6 +30,8 @@ export const TrackingScreen: React.FC = () => {
     averagePace,
     error,
     permissionGranted,
+    isServicesDisabled,
+    discardedJumpCount,
     summary,
     setActivityType,
     startTracking,
@@ -35,6 +40,7 @@ export const TrackingScreen: React.FC = () => {
     finishTracking,
     resetTracking,
     requestPermission,
+    clearError,
   } = useLocationTracking('running');
 
   const [showSummaryModal, setShowSummaryModal] = useState<boolean>(false);
@@ -72,6 +78,45 @@ export const TrackingScreen: React.FC = () => {
 
   const currentActivityInfo = activities.find((a) => a.type === activityType) || activities[1];
 
+  // Map statusMessage to badge styling
+  const getStatusBadgeStyle = () => {
+    switch (statusMessage) {
+      case 'Tracking':
+        return {
+          pill: styles.statusPillTracking,
+          text: styles.statusTextTracking,
+        };
+      case 'Paused':
+        return {
+          pill: styles.statusPillPaused,
+          text: styles.statusTextPaused,
+        };
+      case 'GPS signal weak':
+        return {
+          pill: styles.statusPillWeak,
+          text: styles.statusTextWeak,
+        };
+      case 'Location permission required':
+      case 'Location services disabled':
+        return {
+          pill: styles.statusPillError,
+          text: styles.statusTextError,
+        };
+      case 'Finished':
+        return {
+          pill: styles.statusPillFinished,
+          text: styles.statusTextFinished,
+        };
+      default:
+        return {
+          pill: styles.statusPillIdle,
+          text: styles.statusTextIdle,
+        };
+    }
+  };
+
+  const badgeStyle = getStatusBadgeStyle();
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#0B1120" />
@@ -86,48 +131,42 @@ export const TrackingScreen: React.FC = () => {
             <Text style={styles.screenSubtitle}>GPS Activity Tracker (Member 2)</Text>
           </View>
 
-          {/* Status Badge */}
-          <View
-            style={[
-              styles.statusPill,
-              status === 'tracking'
-                ? styles.statusPillTracking
-                : status === 'paused'
-                ? styles.statusPillPaused
-                : styles.statusPillIdle,
-            ]}
-          >
-            <Text
-              style={[
-                styles.statusPillText,
-                status === 'tracking'
-                  ? styles.statusTextTracking
-                  : status === 'paused'
-                  ? styles.statusTextPaused
-                  : styles.statusTextIdle,
-              ]}
-            >
-              {status === 'tracking'
-                ? 'RECORDING'
-                : status === 'paused'
-                ? 'PAUSED'
-                : 'READY'}
+          {/* Tracking Status Indicator (Requirement 3) */}
+          <View style={[styles.statusPill, badgeStyle.pill]}>
+            <Text style={[styles.statusPillText, badgeStyle.text]}>
+              {statusMessage.toUpperCase()}
             </Text>
           </View>
         </View>
 
-        {/* Error / Permission Warning Banner */}
+        {/* Error Banner with dismiss */}
         {error && (
           <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>⚠️ {error}</Text>
+            <View style={styles.errorRow}>
+              <Text style={styles.errorText}>⚠️ {error}</Text>
+              <TouchableOpacity onPress={clearError} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={styles.errorDismiss}>✕</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
+        {/* Location Services Disabled Warning */}
+        {isServicesDisabled && (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>Location Services Turned Off</Text>
+            <Text style={styles.warningText}>
+              Device GPS is turned off. Please enable Location in your device quick settings.
+            </Text>
+          </View>
+        )}
+
+        {/* Permission Denied Card */}
         {permissionGranted === false && (
           <View style={styles.permissionCard}>
             <Text style={styles.permissionTitle}>GPS Permission Needed</Text>
             <Text style={styles.permissionText}>
-              Enable location permissions so FitTrack can map your route and measure pace.
+              FitTrack needs location permission to calculate distance and record your path.
             </Text>
             <TouchableOpacity
               style={styles.permissionBtn}
@@ -139,7 +178,7 @@ export const TrackingScreen: React.FC = () => {
           </View>
         )}
 
-        {/* Activity Selection Carousel (Enabled when idle) */}
+        {/* Activity Selection Tabs (Enabled only when idle) */}
         {status === 'idle' && (
           <View style={styles.activitySelectorSection}>
             <Text style={styles.sectionLabel}>SELECT ACTIVITY</Text>
@@ -232,11 +271,14 @@ export const TrackingScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* GPS Map & Breadcrumb Visualizer */}
+        {/* GPS Map & Breadcrumb Visualizer with Accuracy & Quality feedback */}
         <RouteMapVisualizer
           coordinates={coordinates}
           currentLocation={currentLocation}
           status={status}
+          gpsSignalQuality={gpsSignalQuality}
+          accuracyWarning={accuracyWarning}
+          discardedJumpCount={discardedJumpCount}
         />
 
         {/* Bottom Action Controls */}
@@ -343,6 +385,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 16,
     borderWidth: 1,
+    maxWidth: 160,
   },
   statusPillIdle: {
     backgroundColor: '#1E293B',
@@ -356,10 +399,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245, 158, 11, 0.2)',
     borderColor: '#F59E0B',
   },
+  statusPillWeak: {
+    backgroundColor: 'rgba(245, 158, 11, 0.25)',
+    borderColor: '#F59E0B',
+  },
+  statusPillError: {
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    borderColor: '#EF4444',
+  },
+  statusPillFinished: {
+    backgroundColor: 'rgba(56, 189, 248, 0.2)',
+    borderColor: '#38BDF8',
+  },
   statusPillText: {
     fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 0.8,
+    letterSpacing: 0.6,
   },
   statusTextIdle: {
     color: '#94A3B8',
@@ -370,6 +425,15 @@ const styles = StyleSheet.create({
   statusTextPaused: {
     color: '#F59E0B',
   },
+  statusTextWeak: {
+    color: '#FDE68A',
+  },
+  statusTextError: {
+    color: '#FCA5A5',
+  },
+  statusTextFinished: {
+    color: '#38BDF8',
+  },
   errorBanner: {
     backgroundColor: 'rgba(239, 68, 68, 0.15)',
     borderWidth: 1,
@@ -378,10 +442,41 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 12,
   },
+  errorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   errorText: {
     color: '#FCA5A5',
     fontSize: 12,
     fontWeight: '600',
+    flex: 1,
+  },
+  errorDismiss: {
+    color: '#FCA5A5',
+    fontSize: 14,
+    fontWeight: '700',
+    paddingLeft: 8,
+  },
+  warningCard: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  warningTitle: {
+    color: '#F59E0B',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  warningText: {
+    color: '#FEF3C7',
+    fontSize: 12,
+    lineHeight: 16,
   },
   permissionCard: {
     backgroundColor: '#1E293B',

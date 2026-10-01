@@ -1,17 +1,23 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { LocationCoordinate, TrackingStatus } from '../../types/tracking';
+import { LocationCoordinate, TrackingStatus, GpsSignalQuality } from '../../types/tracking';
 
 interface RouteMapVisualizerProps {
   coordinates: LocationCoordinate[];
   currentLocation: LocationCoordinate | null;
   status: TrackingStatus;
+  gpsSignalQuality?: GpsSignalQuality;
+  accuracyWarning?: string | null;
+  discardedJumpCount?: number;
 }
 
 export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
   coordinates,
   currentLocation,
   status,
+  gpsSignalQuality = 'searching',
+  accuracyWarning,
+  discardedJumpCount = 0,
 }) => {
   const CANVAS_WIDTH = 320;
   const CANVAS_HEIGHT = 180;
@@ -40,9 +46,7 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
     const usableHeight = CANVAS_HEIGHT - PADDING * 2;
 
     return coordinates.map((c) => {
-      // longitude maps to X (left to right)
       const x = PADDING + ((c.longitude - minLng) / lngSpan) * usableWidth;
-      // latitude maps to Y (inverted: higher latitude is North / top)
       const y = PADDING + (1 - (c.latitude - minLat) / latSpan) * usableHeight;
       return { x, y };
     });
@@ -51,38 +55,58 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
   const latestPoint = projectedPoints[projectedPoints.length - 1];
   const startPoint = projectedPoints[0];
 
+  const signalQualityColor =
+    gpsSignalQuality === 'strong'
+      ? '#10B981'
+      : gpsSignalQuality === 'fair'
+      ? '#38BDF8'
+      : gpsSignalQuality === 'poor'
+      ? '#F59E0B'
+      : '#94A3B8';
+
   return (
     <View style={styles.container}>
-      {/* Header bar with GPS status indicator */}
+      {/* Header bar with GPS status and satellite signal indicator */}
       <View style={styles.header}>
         <View style={styles.statusDotRow}>
           <View
             style={[
               styles.statusDot,
-              status === 'tracking'
-                ? styles.statusDotActive
-                : status === 'paused'
-                ? styles.statusDotPaused
-                : styles.statusDotIdle,
+              { backgroundColor: signalQualityColor },
             ]}
           />
           <Text style={styles.headerText}>
             {status === 'tracking'
-              ? 'GPS TRACKING ACTIVE'
+              ? `GPS: ${gpsSignalQuality.toUpperCase()} SIGNAL`
               : status === 'paused'
               ? 'GPS PAUSED'
               : 'GPS READY'}
           </Text>
         </View>
 
-        <Text style={styles.pointsCount}>
-          {coordinates.length} {coordinates.length === 1 ? 'point' : 'points'}
-        </Text>
+        <View style={styles.headerRight}>
+          {discardedJumpCount > 0 && (
+            <View style={styles.filterPill}>
+              <Text style={styles.filterPillText}>
+                🛡️ {discardedJumpCount} filtered
+              </Text>
+            </View>
+          )}
+          <Text style={styles.pointsCount}>
+            {coordinates.length} {coordinates.length === 1 ? 'pt' : 'pts'}
+          </Text>
+        </View>
       </View>
+
+      {/* Accuracy Warning Banner */}
+      {accuracyWarning && (
+        <View style={styles.warningStrip}>
+          <Text style={styles.warningStripText}>⚠️ {accuracyWarning}</Text>
+        </View>
+      )}
 
       {/* Visual Route Canvas */}
       <View style={styles.canvas}>
-        {/* Subtle grid lines background */}
         <View style={styles.gridLineHorizontal} />
         <View style={styles.gridLineVertical} />
 
@@ -90,23 +114,28 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
           <View style={styles.emptyContainer}>
             <View style={styles.radarCircleOuter}>
               <View style={styles.radarCircleInner}>
-                <View style={styles.radarDot} />
+                <View
+                  style={[
+                    styles.radarDot,
+                    { backgroundColor: signalQualityColor },
+                  ]}
+                />
               </View>
             </View>
             <Text style={styles.emptyTitle}>
               {status === 'tracking'
-                ? 'Acquiring GPS Signal...'
+                ? 'Acquiring Accurate GPS Fix...'
                 : 'Route Preview'}
             </Text>
             <Text style={styles.emptySubtitle}>
               {status === 'tracking'
-                ? 'Move outdoors for better satellite visibility'
-                : 'Start an activity to record your GPS trail'}
+                ? 'Filtering readings until accuracy is under ±35m'
+                : 'Start an activity to plot your breadcrumb route'}
             </Text>
           </View>
         ) : (
           <View style={StyleSheet.absoluteFill}>
-            {/* Draw connection trails between consecutive projected points */}
+            {/* Draw connection trails */}
             {projectedPoints.map((pt, index) => {
               if (index === 0) return null;
               const prev = projectedPoints[index - 1];
@@ -135,7 +164,7 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
               );
             })}
 
-            {/* Breadcrumb waypoint dots (rendered every few points to keep performant) */}
+            {/* Breadcrumb waypoint dots */}
             {projectedPoints.map((pt, index) => {
               const isFirst = index === 0;
               const isLast = index === projectedPoints.length - 1;
@@ -201,10 +230,17 @@ export const RouteMapVisualizer: React.FC<RouteMapVisualizerProps> = ({
 
         <View style={styles.telemetryItem}>
           <Text style={styles.telemetryLabel}>ACCURACY</Text>
-          <Text style={styles.telemetryValue}>
+          <Text
+            style={[
+              styles.telemetryValue,
+              currentLocation?.accuracy && currentLocation.accuracy > 35
+                ? { color: '#F59E0B' }
+                : { color: '#10B981' },
+            ]}
+          >
             {currentLocation?.accuracy
               ? `±${Math.round(currentLocation.accuracy)}m`
-              : 'Ready'}
+              : 'Acquiring'}
           </Text>
         </View>
       </View>
@@ -241,25 +277,47 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     marginRight: 8,
   },
-  statusDotActive: {
-    backgroundColor: '#10B981',
-  },
-  statusDotPaused: {
-    backgroundColor: '#F59E0B',
-  },
-  statusDotIdle: {
-    backgroundColor: '#94A3B8',
-  },
   headerText: {
     color: '#E2E8F0',
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.8,
   },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  filterPill: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: '#F59E0B',
+  },
+  filterPillText: {
+    color: '#F59E0B',
+    fontSize: 9,
+    fontWeight: '700',
+  },
   pointsCount: {
     color: '#94A3B8',
     fontSize: 11,
     fontWeight: '500',
+  },
+  warningStrip: {
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(245, 158, 11, 0.4)',
+  },
+  warningStripText: {
+    color: '#FDE68A',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   canvas: {
     width: '100%',
@@ -314,7 +372,6 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#3B82F6',
   },
   emptyTitle: {
     color: '#CBD5E1',

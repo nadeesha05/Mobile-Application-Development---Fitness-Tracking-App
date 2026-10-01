@@ -2,6 +2,8 @@ export type ActivityType = 'walking' | 'running' | 'cycling';
 
 export type TrackingStatus = 'idle' | 'tracking' | 'paused' | 'finished';
 
+export type GpsSignalQuality = 'strong' | 'fair' | 'poor' | 'searching' | 'unavailable';
+
 export interface LocationCoordinate {
   latitude: number;
   longitude: number;
@@ -24,11 +26,15 @@ export interface ActivitySummaryData {
   caloriesBurned: number; // estimated kcal
   coordinates: LocationCoordinate[];
   createdAt: string;
+  discardedJumpCount?: number;
 }
 
 export interface TrackingState {
   activityType: ActivityType;
   status: TrackingStatus;
+  statusMessage: string;
+  gpsSignalQuality: GpsSignalQuality;
+  accuracyWarning: string | null;
   coordinates: LocationCoordinate[];
   currentLocation: LocationCoordinate | null;
   distance: number; // in kilometers
@@ -38,4 +44,5 @@ export interface TrackingState {
   averagePace: string; // in "MM:SS /km"
   error: string | null;
   permissionGranted: boolean | null;
+  discardedJumpCount: number;
 }

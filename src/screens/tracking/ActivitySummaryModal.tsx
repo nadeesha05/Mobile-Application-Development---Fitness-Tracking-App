@@ -146,6 +146,15 @@ export const ActivitySummaryModal: React.FC<ActivitySummaryModalProps> = ({
             </View>
           </View>
 
+          {/* Anomaly filter notice */}
+          {summary.discardedJumpCount != null && summary.discardedJumpCount > 0 && (
+            <View style={styles.anomalyNotice}>
+              <Text style={styles.anomalyNoticeText}>
+                🛡️ Filtered {summary.discardedJumpCount} unrealistic GPS jump {summary.discardedJumpCount === 1 ? 'anomaly' : 'anomalies'} to preserve distance accuracy.
+              </Text>
+            </View>
+          )}
+
           {/* GPS Route Map Visualizer */}
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recorded GPS Trail</Text>
@@ -158,6 +167,7 @@ export const ActivitySummaryModal: React.FC<ActivitySummaryModalProps> = ({
                 : null
             }
             status="finished"
+            discardedJumpCount={summary.discardedJumpCount || 0}
           />
 
           {/* JSON Payload Inspection Toggle (Ready for Member 1 / Firebase) */}
@@ -189,6 +199,7 @@ export const ActivitySummaryModal: React.FC<ActivitySummaryModalProps> = ({
                     endTime: summary.endTime,
                     createdAt: summary.createdAt,
                     coordinatesCount: summary.coordinates.length,
+                    discardedJumpCount: summary.discardedJumpCount || 0,
                     sampleCoordinates: summary.coordinates.slice(0, 3),
                   },
                   null,
@@ -343,6 +354,21 @@ const styles = StyleSheet.create({
     width: 1,
     height: '100%',
     backgroundColor: '#334155',
+  },
+  anomalyNotice: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  anomalyNoticeText: {
+    color: '#FDE68A',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   sectionHeader: {
     marginTop: 8,
